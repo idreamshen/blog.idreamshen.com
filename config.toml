@@ -1,0 +1,9 @@
+baseURL = "https://idreamshen.github.io/"
+languageCode = "en-us"
+title = "ChenHsingYu's Blog"
+
+theme = "one"
+googleAnalytics = "UA-123-45"
+
+[params]
+    navigation = ["archives.md", "about.md"]
