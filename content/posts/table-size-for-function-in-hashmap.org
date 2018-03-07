@@ -1,0 +1,21 @@
+---
+title: "HashMap 类中的 tableSizeFor 方法"
+date: 2018-03-07T20:28:52+08:00
+draft: true
+---
+
+*** tableSizeFor 方法源码
+#+BEGIN_SRC java 
+/**
+ * Returns a power of two size for the given target capacity.
+ */
+static final int tableSizeFor(int cap) {
+    int n = cap - 1;
+    n |= n >>> 1;
+    n |= n >>> 2;
+    n |= n >>> 4;
+    n |= n >>> 8;
+    n |= n >>> 16;
+    return (n < 0) ? 1 : (n >= MAXIMUM_CAPACITY) ? MAXIMUM_CAPACITY : n + 1;
+}
+#+END_SRC
