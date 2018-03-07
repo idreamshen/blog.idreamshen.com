@@ -1,5 +1,5 @@
 baseURL = "https://idreamshen.github.io/"
-languageCode = "en-us"
+languageCode = "zh-cn"
 title = "ChenHsingYu's Blog"
 
 theme = "one"
