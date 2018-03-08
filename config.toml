@@ -3,7 +3,7 @@ languageCode = "zh-cn"
 title = "ChenHsingYu's Blog"
 
 theme = "one"
-googleAnalytics = "UA-123-45"
+googleAnalytics = "UA-49492756-1"
 
 [params]
     navigation = ["archives.md", "about.md"]
