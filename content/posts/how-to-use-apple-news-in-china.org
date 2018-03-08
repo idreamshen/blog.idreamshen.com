@@ -22,3 +22,6 @@ draft: false
 *** 备注
 - 不建议在 iPhone 上使用 News，iPhone 上运行 News 必须开启飞行模式
 - 一旦 News 加载新闻成功后，可以关闭梯子，因为 News 仅在启动时进行地域检测 
+
+*** 参考
+- [[https://www.v2ex.com/t/223846#r_2466757]]
