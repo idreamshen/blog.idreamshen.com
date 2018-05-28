@@ -1,0 +1,10 @@
+---
+title: "iTunes Store 观影指南"
+date: 2018-03-05T23:34:10+08:00
+draft: true
+---
+** 简介
+本文主要介绍如何在国内使用 iTunes App 购买付费电影或音乐等
+
+** 核心步骤
+将自己的 Apple ID 转区至美区
