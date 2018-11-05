@@ -1,7 +1,7 @@
 ---
 title: "修复 Chrome 控制台字体大小"
 date: 2018-11-05T19:23:00+08:00
-draft: true
+draft: false
 ---
 
 最近在调试 Web 应用时发现 Chrome 的控制台字体非常大，相当影响调试体验。在 Chrome 中调整了一遍字体相关的配置，仍然无效。
