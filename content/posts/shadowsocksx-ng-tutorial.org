@@ -1,6 +1,10 @@
 ---
-title: "Shadowsocksx Ng Tutorial"
+title: "某梯子的客户端使用教程"
 date: 2018-05-28T11:47:19+08:00
 draft: true
 ---
+
+1. 首先运行 ss-ng，在顶部
+
+
 
