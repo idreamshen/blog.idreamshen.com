@@ -1,8 +1,13 @@
 baseURL = "https://idreamshen.github.io/"
 languageCode = "zh-cn"
-title = "ChenHsingYu's Blog"
+title = "ChenHsingYu"
 theme = "one"
 googleAnalytics = "UA-49492756-1"
+
+# Chroma Syntax Highlighting
+pygmentsCodefences = true
+pygmentsCodefencesGuessSyntax = true
+pygmentsStyle = "pygments"
 
 [params]
     navigation = ["archives.md", "about.md"]
