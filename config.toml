@@ -1,7 +1,7 @@
 baseURL = "https://idreamshen.github.io/"
 languageCode = "zh-cn"
 title = "ChenHsingYu"
-theme = "one"
+theme = "yinyang"
 googleAnalytics = "UA-49492756-1"
 
 # Chroma Syntax Highlighting
@@ -10,4 +10,8 @@ pygmentsCodefencesGuessSyntax = true
 pygmentsStyle = "pygments"
 
 [params]
-    navigation = ["archives.md", "about.md"]
+    headTitle = "ChenHsingYu"
+    mainSections = ["posts"]
+    [[params.socials]]
+    name = "Github"
+    link = "https://github.com/idreamshen"
