@@ -12,6 +12,7 @@ pygmentsStyle = "pygments"
 [params]
     headTitle = "ChenHsingYu"
     mainSections = ["posts"]
+    extraHead = '<script async src="https://www.googletagmanager.com/gtag/js?id=UA-49492756-1"></script>'
     [[params.socials]]
     name = "Github"
     link = "https://github.com/idreamshen"
