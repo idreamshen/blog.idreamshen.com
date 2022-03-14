@@ -1,0 +1,39 @@
+---
+title: "Github Clone: Connection closed by remote host"
+date: 2022-03-14T12:12:02+08:00
+draft: false
+---
+
+* 背景
+今天尝试克隆 Github 仓库时遇到了诡异的报措 ~kex_exchange_identification: Connection closed by remote host~ 。随即做如下检查：
+  - Github 平台与本地的 ~ssh key~ 均配置正常
+  - 本地 =~/.ssh/config~= 中没有开启 =proxy= 代理配置
+  - 执行命令 ~ssh -T git@github.com~ 返回如下结果
+#+begin_src sh
+$ ssh -T git@github.com
+
+kex_exchange_identification: Connection closed by remote host
+#+end_src
+
+* 原因
+家中使用的梯子封禁了 Github 端口 22 的连接
+
+* 解决
+将 Github 的连接端口从 22 改为 443 即可。修改 =~/.ssh/config= ，添加如下段落即可
+#+begin_src sh
+Host github.com
+    HostName ssh.github.com
+    User git
+    Port 443
+#+end_src
+
+* 验证
+#+begin_src sh
+$ ssh -T git@github.com
+
+Hi xxx! You've successfully authenticated, but GitHub does not provide shell access.
+#+end_src
+
+* 参考资料
+- [[https://www.v2ex.com/t/807649][ssh github 突然报 Connection closed？]]
+- [[https://docs.github.com/cn/authentication/troubleshooting-ssh/using-ssh-over-the-https-port][在 HTTPS 端口使用 SSH]]
