@@ -15,3 +15,6 @@ pygmentsStyle = "pygments"
     [[params.socials]]
     name = "Github"
     link = "https://github.com/idreamshen"
+    [[params.socials]]
+    name = "Email"
+    link = "mailto:idream.shen@gmail.com"
