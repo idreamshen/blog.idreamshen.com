@@ -9,6 +9,9 @@ pygmentsCodefences = true
 pygmentsCodefencesGuessSyntax = true
 pygmentsStyle = "pygments"
 
+#[taxonomies]
+#  tag = "tags"
+
 [params]
     headTitle = "ChenHsingYu"
     mainSections = ["posts"]
