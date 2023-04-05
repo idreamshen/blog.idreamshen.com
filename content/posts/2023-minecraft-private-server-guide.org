@@ -1,7 +1,7 @@
 ---
 title: "Minecraft 1.9.12 私服新人游戏安装指南"
 date: 2023-04-05T12:00:00+08:00
-draft: true
+draft: false
 ---
 
 本文为 MC 新人内部指南，仅供群友参考使用。
