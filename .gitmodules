@@ -1,6 +1,3 @@
-[submodule "themes/one"]
-        path = themes/one
-        url = git@github.com:idreamshen/hugo-theme-one.git
 [submodule "public"]
 	path = public
 	url = git@github.com:idreamshen/idreamshen.github.io.git
