@@ -1,2 +1,2 @@
 #!/bin/sh
-hugo --bind=0.0.0.0 -D server
+hugo --bind=0.0.0.0 --port=3000 -D server
