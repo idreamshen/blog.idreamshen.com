@@ -1,0 +1,140 @@
+---
+title: "RKE2 Etcd Received Signal Shutting Down"
+date: 2024-12-31T10:36:09+08:00
+draft: false
+---
+
+#+begin_quote
+TL;DR
+
+RKE2 < 1.19.5 时，若遇到 etcd 无限重启，日志显示 received signal; shutting down 且是 =systemd= 系统时，需添加 =systemd.unified_cgroup_hierarchy=0= 内核参数。
+#+end_quote
+
+
+* 问题现象
+家里的 K8S 集群重启后发生异常。表现当重启一个节点后，这台节点在 Rancher 界面会显示为 Error，且长时间无法自动恢复。
+并且，如果将 3 台节点都重启，最终会变为 3 节点 Error。
+[[/image/rancher-cluster-error.jpg]]
+
+* 环境信息
+3 节点集群
+|---------+-----------------|
+| Debian  | 12              |
+| Linux   | 6.1.0-25-amd64  |
+| Rancher | v2.8.2          |
+| RKE2    | v1.27.12+rke2r1 |
+|---------+-----------------|
+
+* 排查过程
+
+** 虚拟机恢复
+首先尝试利用虚拟机的备份进行还原 K8S 集群，但是当我使用前两天正常备份还原后，启动 3 节点，发现仍然都是 Error。
+也就是说，如果我的节点前2天就重启，那么这问题就会提前暴露。
+
+同时发现一个奇怪的现象，第3个节点在一段较长时间后，又显示正常运行，即在 Rancher 界面显示为 Running。
+
+** Etcd 备份恢复
+使用命令 crictl 发现 etcd 节点在不断重启。
+#+begin_src sh
+export CRI_CONFIG_FILE=/var/lib/rancher/rke2/agent/etc/crictl.yaml
+/var/lib/rancher/rke2/bin/crictl ps -a | grep etcd
+
+21040b2c9bd8f       c6b7a4f2f79b2       45 second ago        Exited    etcd    54    c3908f560fb1b       etcd-rancher-homelab-2
+#+end_src
+
+接下来尝试恢复 etcd 到之前的版本。
+
+RKE2 etcd 的默认 snapshot 路径为 =/var/lib/rancher/rke2/server/db/snapshots=
+#+begin_src sh
+ls -lha /var/lib/rancher/rke2/server/db/snapshots
+
+total 420M
+drwx------ 2 root root 4.0K Dec 31 10:00 .
+drwx------ 5 root root 4.0K Dec 31 04:04 ..
+-rw------- 1 root root  97M Dec 30 20:00 etcd-snapshot-rancher-homelab-1-1735560001
+-rw------- 1 root root  99M Dec 31 00:00 etcd-snapshot-rancher-homelab-1-1735574403
+-rw------- 1 root root 113M Dec 31 05:00 etcd-snapshot-rancher-homelab-1-1735592403
+-rw------- 1 root root 113M Dec 31 10:00 etcd-snapshot-rancher-homelab-1-1735610406
+#+end_src
+
+按照操作手册 [[https://docs.rke2.io/datastore/backup_restore][Restoring a Snapshot to Existing Nodes]] 进行还原指定 snapshot
+1. 暂停所有集群的 rke2-server 并重启节点。（为了确保 rke2-server 相关进程都退出，增加了重启操作，且禁用 rke2-server 自启动）
+   #+begin_src sh
+   systemctl stop rke2-server
+   systemctl disable rke2-server
+   reboot
+   #+end_src
+2. 进入 RKE2 主节点。如何确认是否是 RKE2 主节点
+   #+begin_src sh
+   grep \"server\" /etc/rancher/rke2/config.yaml.d/50-rancher.yaml
+
+     "server": "https://192.168.1.12:9345",
+   #+end_src
+   如果出现上述 =server= 字段，说明当且节点不是 RKE2 主节点
+3. 备份 etcd 数据
+   #+begin_src sh
+   mv /var/lib/rancher/rke2/server/db /var/lib/rancher/rke2/server/db_backup
+   #+end_src
+4. 还原指定 snapshot
+   #+begin_src sh
+   rke2 server \
+     --cluster-reset \
+     --cluster-reset-restore-path=/var/lib/rancher/rke2/server/db-bak/snapshots/etcd-snapshot-rancher-homelab-2-1735041603
+   #+end_src
+5. 启动 rke2-server
+   #+begin_src sh
+   systemctl start rke2-server
+   #+end_src
+6. 进入其他节点，先删除 =/var/lib/rancher/rke2/server/db= (记得提前备份)，再启动 rke2-server
+
+经过上述操作完成后，很不幸，etcd 仍然出现不断重启的现象，整个集群依然瘫痪中。
+
+** 排查 etcd 日志
+其实一开始就有检查过 etcd 日志，但是粗略看过没发现异常点。接下来重新仔细查看日志，找到一处可疑日志。
+
+#+begin_example
+{"level":"info","ts":"2024-12-27T20:22:18.102Z","caller":"osutil/interrupt_unix.go:64","msg":"received signal; shutting down","signal":"terminated"}
+#+end_example
+
+它可疑的原因是前一行日志是 =2024-12-27T20:22:14= 左右，且上一行日志显示 etcd 是正常运行的。也就是说 etcd 突然收到了关闭信号。
+
+** 搜索并解决问题
+搜索 =received signal; shutting down= 关键词时，发现文章 [[https://discuss.kubernetes.io/t/why-does-etcd-fail-with-debian-bullseye-kernel/19696/5][Why does etcd fail with Debian/bullseye kernel?]] 提到需要增加内核参数 =systemd.unified_cgroup_hierarchy=0=
+
+搜索 =rancher systemd.unified_cgroup_hierarchy=0= 关键词后，发现 [[https://docs.rke2.io/zh/known_issues#control-groups-v2][RKE2文档]] 确实提到了相关问题
+#+begin_quote
+Control Groups V2
+RKE2 v1.19.5+ 内置 containerd v1.4.x 或更高版本，因此应该在支持 cgroups v2 的系统上运行。
+旧版本 (< 1.19.5) 内置 containerd 1.3.x 分支（从 1.4.x 向后移植 SELinux commits），它不支持 cgroups v2，需要一些前期配置：
+
+假设使用基于 systemd 的系统，设置 systemd.unified_cgroup_hierarchy=0 内核参数将向 systemd 表明它应该以混合 (cgroups v1 + v2) 方式运行。
+结合上述情况，设置 systemd.legacy_systemd_cgroup_controller 内核参数将向 systemd 表明它应该以旧版（cgroups v1）的方式运行。
+由于这些参数是内核命令行参数，因此必须在系统引导程序中设置，以便在 /sbin/init 作为 PID 1 传递给 systemd。
+#+end_quote
+
+** 解决问题
+修改 =/etc/default/grub= ，给 =GRUB_CMDLINE_LINUX_DEFAULT= 增加 =systemd.unified_cgroup_hierarchy=0= 参数
+
+#+begin_src sh
+head -n 10 /etc/default/grub
+
+GRUB_DEFAULT=0
+GRUB_TIMEOUT=5
+GRUB_DISTRIBUTOR=`lsb_release -i -s 2> /dev/null || echo Debian`
+GRUB_CMDLINE_LINUX_DEFAULT="quiet systemd.unified_cgroup_hierarchy=0"
+GRUB_CMDLINE_LINUX=""
+
+update-grub
+
+reboot
+#+end_src
+
+至此，3 节点内核参数修改后均能正常启动 k8s 集群
+
+
+* 参考资料
+- [[https://discuss.kubernetes.io/t/why-does-etcd-fail-with-debian-bullseye-kernel/19696/5][Why does etcd fail with Debian/bullseye kernel?]]
+- [[https://github.com/etcd-io/etcd/issues/13670][etcd keeps shutting down randomly on new self-managed k8s cluster via kubeadm #13670]]
+- [[https://gjhenrique.com/cgroups-k8s/][Who's killing my pods?]]
+- [[https://docs.rke2.io/zh/known_issues#control-groups-v2][Control Groups V2]]
+- [[https://docs.rke2.io/datastore/backup_restore][Backup and Restore]]
