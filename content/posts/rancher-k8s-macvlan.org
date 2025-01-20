@@ -1,0 +1,518 @@
+---
+title: "饥荒服务器 dontstarve 部署之 Macvlan"
+date: 2025-01-19T22:35:00+08:00
+draft: false
+---
+
+* 背景
+和朋友玩饥荒联机，需要部署一个 24 小时运行的游戏服务器，方便大家随时能加入游戏。
+本文将记录搭建过程中遇到的各种问题，以及相关解决方案。
+
+* 阅读须知
+1. 有搭建饥荒服务器需求
+2. 有 docker 使用经验
+3. 可自行配置防火墙 NAT SNAT 规则
+4. 有 K8S 部署饥荒服务器需求
+5. 有 K8S 部署多个饥荒服务器需求
+
+* 目标
+我们的最终目标是：
+1. 支持 Steam 离线玩家加入
+2. 在 K8S 集群中部署饥荒游戏服务器
+3. 饥荒游戏服务器在 K8S 集群中支持多 POD 部署
+
+* 任务
+对于上述目标，拆解成如下这些任务：
+1. 使用 Docker 运行饥荒在线服务器
+2. 使用 Docker 运行饥荒离线服务器
+3. 使用 Docker Host 网络模式运行饥荒服务器
+4. 使用 NAT 策略实现外部 IP 连接至内网饥荒服务器
+5. 使用 SNAT 策略实现外部 IP 映射至内网
+6. 使用 Docker Macvlan 实现多游戏服务器部署
+7. 使用 K8S Macvlan 实现游戏服务器多 POD 部署
+8. 使用 K8S Whereabouts 实现 POD IP 固化
+
+* 术语
+对下文提到的特定名词做些解释。
+|--------------------+--------------------------------------------------------------------------------------------------------|
+| 术语               | 含义                                                                                                   |
+|--------------------+--------------------------------------------------------------------------------------------------------|
+| Steam 在线模式     | Steam 常规启动模式                                                                                     |
+| Steam 离线模式     | 以离线模式启动 Steam , 运行游戏不会进行 Steam 官网校验                                                 |
+| 饥荒服务器在线模式 | 只允许 Steam 在线模式启动的玩家加入                                                                    |
+| 饥荒服务器离线模式 | 允许 Steam 在线模式或 Steam 离线模式启动的玩家加入，同时要求处于相同局域网                             |
+| Macvlan            | 网卡虚拟化技术，将同一网卡虚拟出多张网卡                                                               |
+| Whereabouts        | 一个IP 地址管理（IP Address Management,IPAM）CNI 插件，用于分配整个集群的IP 地址。用于替换host-local。 |
+|--------------------+--------------------------------------------------------------------------------------------------------|
+
+* 环境信息
+- Docker 服务器内网 IP: 192.168.1.100
+- 我的饥荒客户端内网 IP: 192.168.1.77
+- 我的公网 IP: 31.111.111.111
+- 朋友公网 IP: 52.12.34.56
+
+* 任务1 - 使用 Docker 运行饥荒在线服务器
+饥荒服务器有两种模式：在线模式和离线模式
+- 在线模式: 加入的玩家必须保持 Steam 在线用于校验正版信息。
+- 离线模式: 玩家可以使用 Steam 离线模式启动饥荒并加入游戏，但要求所有玩家与游戏服务器都处于相同局域网。
+
+在部署游戏服务器时，默认是在线模式。这里使用 [[https://github.com/Jamesits/docker-dst-server][Jamesits/docker-dst-server]] 的容器进行创建服务器。
+#+begin_src sh
+docker run -d -v /mnt/dst:/data\
+       -p 10999-11000:10999-11000/udp\
+       -p 12346-12347:12346-12347/udp\
+       -e "DST_SERVER_ARCH=amd64"\
+       -it jamesits/dst-server:nightly
+#+end_src
+
+首次启动会有如下容器日志，表示服务器并未启动成功。
+#+begin_example
+[00:00:10]: !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+[00:00:10]: !!!! Your Server Will Not Start !!!!
+[00:00:10]: !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+[00:00:10]: No auth token could be found.
+[00:00:10]: Please visit https://accounts.klei.com/account/game/servers?game=DontStarveTogether
+[00:00:10]: to generate server configuration files
+[00:00:10]:
+[00:00:10]: Alternatively generate a cluster_token you can
+[00:00:10]: open the console from a logged-in game
+[00:00:10]: client with the tilda key (~ / ù) and type:
+[00:00:10]: TheNet:GenerateClusterToken()
+[00:00:10]: This will create 'cluster_token.txt' in
+[00:00:10]: your client settings directory. Copy this
+[00:00:10]: into your cluster settings directory.
+#+end_example
+
+需要去日志中的[[https://accounts.klei.com/account/game/servers?game=DontStarveTogether][官网链接]]生成一个 =cluster token= ，并将内容填入到 =cluster_token.txt= 。
+本文中的路径为如下。
+#+begin_example
+/mnt/dst/DoNotStarveTogether/Cluster_1/cluster_token.txt
+#+end_example
+
+这个 token 的格式类似 ~pds-gxxxxxxxxxxxxxxxa=~ 。
+
+重新启动容器，显示如下日志表示运行成功。
+#+begin_example
+[00:01:06]: [SyncWorldSettings] Resyncing master world option ghostsanitydrain = none to secondary shards.
+[00:01:06]: [SyncWorldSettings] Resyncing master world option portalresurection = always to secondary shards.
+[00:01:06]: [SyncWorldSettings] Resyncing master world option resettime = none to secondary shards.
+[00:01:06]: [SyncWorldSettings] Resyncing master world option basicresource_regrowth = always to secondary shards.
+[00:01:06]: [SyncWorldSettings] Resyncing master world option krampus = default to secondary shards.
+[00:01:06]: [SyncWorldSettings] recieved world settings from master shard.      true
+[00:01:06]: [SyncWorldSettings] applying portalresurection = always from master shard.
+[00:01:06]: [SyncWorldSettings] applying krampus = default from master shard.
+[00:01:06]: [SyncWorldSettings] applying ghostsanitydrain = none from master shard.
+[00:01:06]: [SyncWorldSettings] applying resettime = none from master shard.
+[00:01:06]: [SyncWorldSettings] applying basicresource_regrowth = always from master shard.
+[00:01:07]: [Shard] secondary shard LUA is now ready!
+[00:01:07]: Sim paused
+#+end_example
+
+启动饥荒联机版，进入游戏后使用按键 =`= 启动内置控制台，输入指令并回车运行。
+（ =192.168.1.100= 是 docker 服务器的 IP）
+#+begin_src lua
+c_connect("192.168.1.100", 10999)
+#+end_src
+[[file:/image/dontstarve-c_connect.png]]
+
+客户端连接成功，且服务器产生如下日志。
+#+begin_example
+[00:02:32]: New incoming connection 192.168.1.77|65273 <781xxxx0>
+[00:02:32]: Client connected from 192.168.1.77|65273 <781xxxx0>
+[00:02:32]: ValidateGameSessionToken GUID<781xxxx0>
+[00:02:33]: Client authenticated: (KU_1xxxQ) xxx
+[00:02:33]: [Steam] Authenticated host '781xxxx0'
+[00:02:34]: There is no active event to validate against.
+[00:02:51]: [Join Announcement] xxx
+[00:03:06]: Resuming user: session/ExxxE/xxx
+#+end_example
+
+* 任务2 - 使用 Docker 运行饥荒离线服务器
+我和朋友是通过 Steam 家庭模式进行游戏共享的。
+Steam 家庭有个限制：Steam 在线模式下，共享的游戏只能家庭中 1 人玩。但使用 Steam 离线模式则可以突破这个限制。
+基于此前提，我必须搭建离线模式的饥荒服务器，才能让我和朋友都正常加入游戏服务器。
+
+离线模式饥荒只需修改 cluster.ini 文件的 =offline_cluster= 选项即可。
+
+注：当 ~offline_cluster=true~ 时， ~lan_only_cluster~ 在服务器运行时会强制为 =true= 进行加载。
+
+本文中将 =/mnt/dst/DoNotStarveTogether/Cluster_1/cluster.ini= 的 =offline_cluster= 改为 =true= 即可。
+#+begin_src ini
+[NETWORK]
+cluster_name = DST
+cluster_description = DST
+cluster_password = 12345678
+offline_cluster = true
+lan_only_cluster = false
+#+end_src
+
+重启容器，显示如下日志表示启动成功。
+#+begin_example
+[00:01:20]: About to start a shard with these settings:
+[00:01:20]:   ShardName: [SHDMASTER]
+[00:01:20]:   ShardID: 1
+[00:01:20]:   ShardRole: MASTER
+[00:01:20]:   MasterHost: (null)
+[00:01:20]:   MasterBind: 127.0.0.1
+[00:01:20]:   MasterPort: 10998
+[00:01:20]: [Shard] Starting master server
+[00:01:20]: [Shard] Shard server started on port: 10998
+[00:01:20]: Telling Client our new session identifier: 3F8A53604F747599
+[00:01:21]: Validating portal[1] <-> <nil>[1] (inactive)
+[00:01:21]: Validating portal[2] <-> <nil>[2] (inactive)
+[00:01:21]: Validating portal[3] <-> <nil>[3] (inactive)
+[00:01:21]: Validating portal[4] <-> <nil>[4] (inactive)
+[00:01:21]: Validating portal[5] <-> <nil>[5] (inactive)
+[00:01:21]: Validating portal[6] <-> <nil>[6] (inactive)
+[00:01:21]: Validating portal[7] <-> <nil>[7] (inactive)
+[00:01:21]: Validating portal[8] <-> <nil>[8] (inactive)
+[00:01:21]: Validating portal[9] <-> <nil>[9] (inactive)
+[00:01:21]: Sim paused
+#+end_example
+
+以 Steam 离线模式启动饥荒联机版，进入游戏后使用按键 =`= 启动内置控制台，输入指令并回车运行。
+（ =192.168.1.100= 是 docker 服务器的 IP）
+#+begin_src lua
+c_connect("192.168.1.100", 10999)
+#+end_src
+
+很不幸，在游戏内弹出了“这个服务器仅允许在相同局域网的玩家连接”的错误，同时游戏服务器也有如下相关日志。
+#+begin_example
+[00:15:40]: Unconnected ping from 192.168.1.77|60674
+[00:15:40]: New incoming connection 192.168.1.77|60674 <2395xxx3661>
+[00:15:40]: LAN server refusing connection from 192.168.1.77|60674 <2395xxx3661>
+[00:15:40]: CloseConnectionWithReason: ID_DST_SERVER_IS_LAN_ONLY
+#+end_example
+
+这是因为容器内的 IP 是 =172.17.x.x= ，而游戏客户端的 IP 是 =192.168.1.77= ，并不属于相同局域网，
+所以被游戏服务器拒绝了（饥荒服务端的逻辑）。
+接下来我们尝试解决这个问题。
+
+* 任务3 - 使用 Docker Host 网络模式运行饥荒服务器
+有个简单的处理方式是将该容器的网络模式改为 =host=
+#+begin_src sh
+docker run -d -v /mnt/dst:/data --network=host -e "DST_SERVER_ARCH=amd64" -it jamesits/dst-server:nightly
+#+end_src
+
+这次同一局域网的客户端可以顺利进入游戏服务器了，并且服务器输出日志如下。
+#+begin_example
+[00:01:02]: Unconnected ping from 192.168.1.77|60744
+[00:01:02]: New incoming connection 192.168.1.77|60744 <879xxx174>
+[00:01:02]: Client connected from [LAN] 192.168.1.77|60744 <879xxx174>
+[00:01:02]: Client authenticated: (OU_xxx) xxx
+[00:01:02]: [Shard] Read save location file for (OU_xxx)
+[00:01:21]: [Join Announcement] xxx
+#+end_example
+
+* 任务4 - 使用 NAT 策略实现外部 IP 连接至内网饥荒服务器
+为了让朋友连接到我的局域网游戏服务器，还需要在防火墙做 10999 的端口转发。类似如下规则：
+#+begin_example
+31.111.111.111(wan_ip):57382 -> 192.168.1.100(lan_ip):10999
+#+end_example
+
+这样，朋友使用 =c_connect("31.111.111.111", 57382)= 即可连接到我的局域网游戏服务器。
+但实际上，朋友仍然无法加入游戏服务器，日志显示如下：
+#+begin_example
+[00:15:40]: Unconnected ping from 52.12.34.xx|60674
+[00:15:40]: New incoming connection 52.12.34.xx|60674 <2395xxx3661>
+[00:15:40]: LAN server refusing connection from 52.12.34.xx|60674 <2395xxx3661>
+[00:15:40]: CloseConnectionWithReason: ID_DST_SERVER_IS_LAN_ONLY
+#+end_example
+
+=52.12.34.xx= 这是我朋友的公网出口 IP，饥荒服务器判定为不是一个局域网，所以拒绝连接。
+
+* 任务5 - 使用 SNAT 策略实现外部 IP 映射至内网
+为了解决上述公网请求的问题，需要在防火墙增加一个 SNAT 策略。
+
+对于从 wan 接收到的请求，如果要转发至 lan，则在转发前将源 IP 修改为 lan 网关 IP，
+即修改为 192.168.1.1，这样就能让饥荒服务器认为是来自相同局域网的连接。
+
+饥荒服务端日志中可以看到有个来自网关（192.168.1.1）的请求。
+#+begin_example
+[00:01:02]: Unconnected ping from 192.168.1.1|31202
+[00:01:02]: New incoming connection 192.168.1.1|31202 <281xxx1>
+[00:01:02]: Client connected from [LAN] 192.168.1.1|31202 <281xxx1>
+[00:01:02]: Client authenticated: (OU_xxx) xxx
+[00:01:02]: [Shard] Read save location file for (OU_xxx)
+[00:01:21]: [Join Announcement] xxx
+#+end_example
+
+* 任务6 - 使用 Docker Macvlan 实现多游戏服务器部署
+饥荒离线模式服务器还有个限制：无法修改监听端口
+
+如果我们使用 host 网络模式部署，就会导致一台宿主机只能运行一个容器。
+我们需要有个方案能在同一台宿主机上运行多个饥荒服务器，以提高资源利用率。
+
+macvlan 可以解决上述问题。使用 macvlan 虚拟出多张网卡，并获得局域网内的真实 IP。
+
+#+begin_src sh
+docker network create -d macvlan \
+  --subnet=192.168.1.0/24 \
+  --gateway=192.168.1.1 \
+  -o parent=eth0 game_macvlan
+#+end_src
+
+使用 =docker network ls= 可以看到新建成功的 =game_macvlan= 网络
+#+begin_src sh
+docker network ls
+
+NETWORK ID     NAME           DRIVER    SCOPE
+de26baa4e09c   bridge         bridge    local
+bd5f6c20ce80   game_macvlan   macvlan   local
+f28054695862   host           host      local
+32f1f9ab8121   none           null      local
+#+end_src
+
+使用 =game_macvlan= 网络启动容器
+#+begin_src sh
+docker run -d -v /mnt/dst:/data --network=game_macvlan -e "DST_SERVER_ARCH=amd64" -it jamesits/dst-server:nightly
+#+end_src
+
+查看运行状态 =docker ps=
+#+begin_src sh
+docker ps
+
+CONTAINER ID   IMAGE                         COMMAND                  CREATED         STATUS
+1aad8d2208bc   jamesits/dst-server:nightly   "entrypoint.sh super…"   8 minutes ago   Up 8 minutes (healthy)
+#+end_src
+
+查看容器获取的 IP， =docker inspect 1aad8d2208bc=
+#+begin_src js
+"Networks": {
+  "game_macvlan": {
+    "IPAMConfig": null,
+    "Links": null,
+    "Aliases": [
+      "1aad8d2208bc"
+    ],
+    "NetworkID": "bd5f6c20ce8062a106c3b7e5dbf60f6c27584776884e92f17f99989bd83dc0dd",
+    "EndpointID": "a8c657ba59c8a7f8934756eb56618eaabc703efe0f06b46719541c557e7ec057",
+    "Gateway": "192.168.1.1",
+    "IPAddress": "192.168.1.2",
+    "IPPrefixLen": 24,
+    "IPv6Gateway": "",
+    "GlobalIPv6Address": "",
+    "GlobalIPv6PrefixLen": 0,
+    "MacAddress": "01:32:c1:b8:19:21",
+    "DriverOpts": null
+  }
+}
+#+end_src
+可以看到此时容器 IP 为 =192.168.1.2= ，为局域网内的真实 IP。
+
+启动饥荒游戏，输入命令
+#+begin_src lua
+c_connect("192.168.1.2", 10999)
+#+end_src
+
+游戏客户端可顺利加入，并且服务器日志显示如下
+#+begin_example
+[00:01:02]: Unconnected ping from 192.168.1.77|60744
+[00:01:02]: New incoming connection 192.168.1.77|60744 <879xxx174>
+[00:01:02]: Client connected from [LAN] 192.168.1.77|60744 <879xxx174>
+[00:01:02]: Client authenticated: (OU_xxx) xxx
+[00:01:02]: [Shard] Read save location file for (OU_xxx)
+[00:01:21]: [Join Announcement] xxx
+#+end_example
+
+接下来只要更新 NAT 规则即可。
+#+begin_example
+31.111.111.111(wan_ip):57382 -> 192.168.1.2(lan_ip):10999
+#+end_example
+
+如果需要再创建一个饥荒服务器，再次使用 =game_macvlan= 网络创建容器即可。
+至此，已经实现了在 docker 环境中部署多个饥荒离线服务器。接下来介绍 K8S 中的部署方案。
+
+* 任务7 - 使用 K8S Macvlan 实现游戏服务器多 POD 部署
+
+首先确保开启 multus 网络插件，用于实现给 pod 分配多个网络接口。
+[[file:/image/dontstarve-rancher-cluster-config.png]]
+
+对于 Rancher，如果 UI 界面无法编辑，则可修改 Cluster Yaml，在 cni 中添加 multus。
+#+begin_src yaml
+machineGlobalConfig:
+  cni: multus,calico
+  disable-kube-proxy: false
+  etcd-expose-metrics: false
+#+end_src
+
+稍等片刻，确保 multus 正常启动
+[[file:/image/dontstarve-rancher-multus-daemonset.png]]
+
+参考 https://github.com/k8snetworkplumbingwg/multus-cni/blob/master/docs/quickstart.md#storing-a-configuration-as-a-custom-resource
+创建一个 =NetworkAttachmentDefinition=
+
+注意：
+1. master 表示真实的网络接口，需按实际情况修改
+2. subnet 为子网范围，需按实际情况修改
+#+begin_example
+cat <<EOF | kubectl create -f -
+apiVersion: "k8s.cni.cncf.io/v1"
+kind: NetworkAttachmentDefinition
+metadata:
+  name: macvlan-conf
+spec:
+  config: '{
+      "type": "macvlan",
+      "master": "eth0",
+      "mode": "bridge",
+      "ipam": {
+        "type": "host-local",
+        "subnet": "192.168.1.0/24",
+        "rangeStart": "192.168.1.200",
+        "rangeEnd": "192.168.1.216",
+        "gateway": "192.168.1.1"
+      }
+    }'
+EOF
+#+end_example
+
+如下表示创建成功
+#+begin_src sh
+> kubectl get network-attachment-definitions
+NAME               AGE
+macvlan-conf       3d2h
+#+end_src
+
+创建 Pod 进行测试 ，其中 =k8s.v1.cni.cncf.io/networks: default/macvlan-conf= 注解表示使用 macvlan-conf 该网络
+#+begin_src sh
+cat <<EOF | kubectl create -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: samplepod
+  annotations:
+    k8s.v1.cni.cncf.io/networks: default/macvlan-conf
+spec:
+  containers:
+  - name: samplepod
+    command: ["/bin/ash", "-c", "trap : TERM INT; sleep infinity & wait"]
+    image: alpine
+EOF
+#+end_src
+
+查看 POD 获得的 IP，如下可知 POD 的 IP 为 =192.168.1.200=
+#+begin_src sh
+> kubectl exec -it samplepod -- ip a
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host
+       valid_lft forever preferred_lft forever
+2: eth0@if38: <BROADCAST,MULTICAST,UP,LOWER_UP,M-DOWN> mtu 1450 qdisc noqueue state UP qlen 1000
+    link/ether 3e:2e:11:25:9a:d2 brd ff:ff:ff:ff:ff:ff
+    inet 10.42.57.112/32 scope global eth0
+       valid_lft forever preferred_lft forever
+    inet6 fe80::4c6e:71ff:fe95:9ad2/64 scope link
+       valid_lft forever preferred_lft forever
+3: net1@if5: <BROADCAST,MULTICAST,UP,LOWER_UP,M-DOWN> mtu 1500 qdisc noqueue state UP
+    link/ether 12:cd:d6:5f:f9:a9 brd ff:ff:ff:ff:ff:ff
+    inet 192.168.1.200/24 brd 192.168.1.255 scope global net1
+       valid_lft forever preferred_lft forever
+    inet6 fe80::80ad:c6ff:fe0f:f7e9/64 scope link
+       valid_lft forever preferred_lft forever
+#+end_src
+
+所以，使用注解 =k8s.v1.cni.cncf.io/networks: default/macvlan-conf= 即可让 POD 通过 macvlan 获取 IP。
+但是我们前面创建的 NetworkAttachmentDefinition 有个缺点，即每次 POD 重建时，获取的 macvlan IP 都会变化，
+对于饥荒服务器来说，期望是有固定的内网 IP，方便做稳定的端口映射。
+接下来将使用 Whereabouts 来解决这问题。
+
+* 任务8 - 使用 K8S Whereabouts 实现 POD IP 固化
+whereabouts: 一个IP 地址管理（IP Address Management,IPAM）CNI 插件，用于分配整个集群的IP 地址。用于替换host-local。
+
+它有个很好的特性是部署 StatefulSet 时 POD IP 可以保持不变。
+参考[[https://github.com/k8snetworkplumbingwg/whereabouts?tab=readme-ov-file#an-example-configuration-using-a-networkattachmentdefinition][教程]]创建 NetworkAttachmentDefinition
+#+begin_src sh
+apiVersion: "k8s.cni.cncf.io/v1"
+kind: NetworkAttachmentDefinition
+metadata:
+  name: whereabouts-conf
+spec:
+  config: '{
+      "type": "macvlan",
+      "master": "eth0",
+      "mode": "bridge",
+      "ipam": {
+        "type": "whereabouts",
+        "range": "192.168.1.0/24",
+        "range_start": "192.168.1.200",
+        "range_end": "192.168.1.216"
+      }
+    }'
+#+end_src
+
+接下来创建一个 StatefulSet 的饥荒服务器
+#+begin_src sh
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Service
+metadata:
+  name: dst-server-test-headless
+  namespace: game
+spec:
+  ports:
+    - name: port1
+      port: 10999
+      protocol: UDP
+      targetPort: 10999
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  annotations:
+  name: dst-server-test
+  namespace: game
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dst-server-test
+  serviceName: dst-server-test-headless
+  template:
+    metadata:
+      annotations:
+        k8s.v1.cni.cncf.io/networks: default/whereabouts-conf
+      labels:
+        app: dst-server-test
+    spec:
+      containers:
+        - env:
+            - name: DST_SERVER_ARCH
+              value: amd64
+          image: jamesits/dst-server:nightly
+          imagePullPolicy: IfNotPresent
+          name: dst-server
+          volumeMounts:
+            - mountPath: /data
+              name: vol-data
+              subPath: data
+  volumeClaimTemplates:
+  - metadata:
+      name: vol-data
+    spec:
+      accessModes: [ "ReadWriteMany" ]
+      resources:
+        requests:
+          storage: 1Gi
+EOF
+#+end_src
+
+可以从 POD 信息中看到获得的 IP 为 192.168.1.220
+[[file:/image/dontstarve-rancher-pod-whereabouts-ip.png]]
+
+此时，即使重启该 StatefulSet，IP 仍能保持不变。后续操作则是 NAT + SNAT，与前面的 docker 相关操作逻辑类似。
+
+* 结语
+至此，通过 macvlan 技术实现了多容器同时部署饥荒服务器。
+使用 whereabouts 固定 macvlan ip，使得防火墙转发规则更稳定。
+
+* 参考资料
+- [[https://blog.starry-s.moe/posts/2024/k3s-multus-macvlan/][K3s + Multus CNI 插件使用 Macvlan]]
+- [[https://docs.rke2.io/networking/multus_sriov][Multus and SR-IOV]]
+- [[https://www.cni.dev/plugins/current/main/macvlan/][macvlan plugin]]
+- [[https://docs.docker.com/engine/network/drivers/macvlan/][Macvlan network driver]]
+- [[https://github.com/k8snetworkplumbingwg/whereabouts][whereabouts]]
+- [[https://www.cni.dev/plugins/current/ipam/dhcp/][dhcp plugin]]
