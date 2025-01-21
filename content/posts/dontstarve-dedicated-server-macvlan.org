@@ -416,7 +416,24 @@ EOF
 whereabouts: 一个IP 地址管理（IP Address Management,IPAM）CNI 插件，用于分配整个集群的IP 地址。用于替换host-local。
 
 它有个很好的特性是部署 StatefulSet 时 POD IP 可以保持不变。
-参考[[https://github.com/k8snetworkplumbingwg/whereabouts?tab=readme-ov-file#an-example-configuration-using-a-networkattachmentdefinition][教程]]创建 NetworkAttachmentDefinition
+
+首先需要在 K8S 集群中安装 whereabouts，我使用的是 Rancher，参考 [[https://docs.rke2.io/networking/multus_sriov#multus-ipam-plugin-options][Multus IPAM plugin options]] 启用 whereabouts。
+#+begin_example
+# /var/lib/rancher/rke2/server/manifests/rke2-multus-config.yaml
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-multus
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    rke2-whereabouts:
+      enabled: true
+#+end_example
+创建并编辑上述文件，重启 =rke2-server= 即可。
+
+然后参考[[https://github.com/k8snetworkplumbingwg/whereabouts?tab=readme-ov-file#an-example-configuration-using-a-networkattachmentdefinition][教程]]创建 NetworkAttachmentDefinition
 #+begin_src sh
 apiVersion: "k8s.cni.cncf.io/v1"
 kind: NetworkAttachmentDefinition
@@ -508,4 +525,5 @@ EOF
 - [[https://www.cni.dev/plugins/current/main/macvlan/][macvlan plugin]]
 - [[https://docs.docker.com/engine/network/drivers/macvlan/][Macvlan network driver]]
 - [[https://github.com/k8snetworkplumbingwg/whereabouts][whereabouts]]
+- [[https://docs.rke2.io/networking/multus_sriov#multus-ipam-plugin-options][Multus IPAM plugin options]]
 - [[https://www.cni.dev/plugins/current/ipam/dhcp/][dhcp plugin]]
